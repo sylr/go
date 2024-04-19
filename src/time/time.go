@@ -89,6 +89,7 @@ package time
 
 import (
 	"errors"
+
 	_ "unsafe" // for go:linkname
 )
 
@@ -1250,50 +1251,10 @@ const (
 
 // MarshalBinary implements the encoding.BinaryMarshaler interface.
 func (t Time) MarshalBinary() ([]byte, error) {
-	var offsetMin int16 // minutes east of UTC. -1 is UTC.
-	var offsetSec int8
-	version := timeBinaryVersionV1
-
-	if t.Location() == UTC {
-		offsetMin = -1
-	} else {
-		_, offset := t.Zone()
-		if offset%60 != 0 {
-			version = timeBinaryVersionV2
-			offsetSec = int8(offset % 60)
-		}
-
-		offset /= 60
-		if offset < -32768 || offset == -1 || offset > 32767 {
-			return nil, errors.New("Time.MarshalBinary: unexpected zone offset")
-		}
-		offsetMin = int16(offset)
-	}
-
-	sec := t.sec()
-	nsec := t.nsec()
-	enc := []byte{
-		version,         // byte 0 : version
-		byte(sec >> 56), // bytes 1-8: seconds
-		byte(sec >> 48),
-		byte(sec >> 40),
-		byte(sec >> 32),
-		byte(sec >> 24),
-		byte(sec >> 16),
-		byte(sec >> 8),
-		byte(sec),
-		byte(nsec >> 24), // bytes 9-12: nanoseconds
-		byte(nsec >> 16),
-		byte(nsec >> 8),
-		byte(nsec),
-		byte(offsetMin >> 8), // bytes 13-14: zone offset in minutes
-		byte(offsetMin),
-	}
-	if version == timeBinaryVersionV2 {
-		enc = append(enc, byte(offsetSec))
-	}
-
-	return enc, nil
+	w := BinaryReader{t}
+	b := make([]byte, 16)
+	l, err := w.Read(b)
+	return b[:l], err
 }
 
 // UnmarshalBinary implements the encoding.BinaryUnmarshaler interface.
@@ -1665,4 +1626,66 @@ func div(t Time, d Duration) (qmod2 int, r Duration) {
 		r = d - r
 	}
 	return
+}
+
+// BinaryReader implements the io.Reader interface for decoding a Time value
+// into a pre-allocated byte slice.
+type BinaryReader struct {
+	Time
+}
+
+// Read reads the binary representation of a Time value into b.
+func (r BinaryReader) Read(b []byte) (int, error) {
+	var offsetMin int16 // minutes east of UTC. -1 is UTC.
+	var offsetSec int8
+	version := timeBinaryVersionV1
+
+	if r.Time.Location() == UTC {
+		offsetMin = -1
+	} else {
+		_, offset := r.Time.Zone()
+		if offset%60 != 0 {
+			version = timeBinaryVersionV2
+			offsetSec = int8(offset % 60)
+		}
+
+		offset /= 60
+		if offset < -32768 || offset == -1 || offset > 32767 {
+			return 0, errors.New("Time.BinaryReader.Read: unexpected zone offset")
+		}
+		offsetMin = int16(offset)
+	}
+
+	if version == timeBinaryVersionV1 && len(b) < 15 {
+		return 0, errors.New("Time.BinaryReader.Read: insufficient buffer size")
+	} else if version == timeBinaryVersionV2 && len(b) < 16 {
+		return 0, errors.New("Time.BinaryReader.Read: insufficient buffer size")
+	}
+
+	sec := r.Time.sec()
+	nsec := r.Time.nsec()
+	_ = b[14]
+	b[0] = version         // byte 0 : version
+	b[1] = byte(sec >> 56) // bytes 1-8: seconds
+	b[2] = byte(sec >> 48)
+	b[3] = byte(sec >> 40)
+	b[4] = byte(sec >> 32)
+	b[5] = byte(sec >> 24)
+	b[6] = byte(sec >> 16)
+	b[7] = byte(sec >> 8)
+	b[8] = byte(sec)
+	b[9] = byte(nsec >> 24) // bytes 9-12: nanoseconds
+	b[10] = byte(nsec >> 16)
+	b[11] = byte(nsec >> 8)
+	b[12] = byte(nsec)
+	b[13] = byte(offsetMin >> 8) // bytes 13-14: zone offset in minutes
+	b[14] = byte(offsetMin)
+
+	ret := 15
+	if version == timeBinaryVersionV2 {
+		b[15] = byte(offsetSec)
+		ret++
+	}
+
+	return ret, nil
 }
