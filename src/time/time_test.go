@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 	"testing/quick"
+	"time"
 	. "time"
 )
 
@@ -1572,6 +1573,67 @@ func BenchmarkUnmarshalText(b *testing.B) {
 	in := []byte("2020-08-22T11:27:43.123456789-02:00")
 	for i := 0; i < b.N; i++ {
 		t.UnmarshalText(in)
+	}
+}
+
+func TestAppendBinaryNilSlice(t *testing.T) {
+	t0 := time.Now().UTC()
+	p, err := t0.AppendBinary(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) != 15 {
+		t.Errorf("t0=%#v\nlen(p)=%#v\nwant p to be %d length", t0, len(p), 15)
+	}
+	if cap(p) != 16 {
+		t.Errorf("t0=%#v\ncap(p)=%#v\nwant p to be %d cap", t0, cap(p), 16)
+	}
+
+	loc := time.FixedZone("UTC+155s", 155)
+	t0 = time.Now().In(loc)
+	p, err = t0.AppendBinary(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) != 16 {
+		t.Errorf("t0=%#v\nlen(p)=%#v\nwant p to be %d length", t0, len(p), 16)
+	}
+	if cap(p) != 16 {
+		t.Errorf("t0=%#v\nlen(p)=%#v\nwant p to be %d cap", t0, len(p), 16)
+	}
+}
+
+func TestAppendBinarySlice(t *testing.T) {
+	p := make([]byte, 5, 10)
+	t0 := time.Now().UTC()
+	p, err := t0.AppendBinary(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) != 5+15 {
+		t.Errorf("t0=%#v\nlen(p)=%d\nwant p to be %d length", t0, len(p), 5+15)
+	}
+	if cap(p) != 5+16 {
+		t.Errorf("t0=%#v\ncap(p)=%d\nwant p to be %d cap", t0, cap(p), 5+16)
+	}
+}
+
+// TestAppendBinarySliceNoCopy tests that AppendBinary() does not copy the slice
+// if it has enough capacity.
+func TestAppendBinarySliceNoCopy(t *testing.T) {
+	p := make([]byte, 0, 16)
+	ap1 := &p
+	t0 := time.Now().UTC()
+	p, err := t0.AppendBinary(p)
+	ap2 := &p
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) != 15 {
+		t.Errorf("t0=%#v\nlen(p)=%d\nwant p to be %d length", t0, len(p), 15)
+	}
+	if ap1 != ap2 {
+		t.Errorf("t0=%#v\nap1=%p\nap2=%p\nwant &p before and after AppendBinary() to be the same", t0, ap1, ap2)
 	}
 }
 

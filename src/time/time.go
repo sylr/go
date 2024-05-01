@@ -1248,8 +1248,9 @@ const (
 	timeBinaryVersionV2                 // For LMT only
 )
 
-// read reads the binary representation of a Time value from the b byte slice.
-func (t Time) read(b []byte) (int, error) {
+// read reads the binary representation of a Time value into the p byte slice.
+// to be error safe p needs to have a 16 bytes length.
+func (t Time) read(p []byte) (int, error) {
 	var offsetMin int16 // minutes east of UTC. -1 is UTC.
 	var offsetSec int8
 	version := timeBinaryVersionV1
@@ -1270,57 +1271,100 @@ func (t Time) read(b []byte) (int, error) {
 		offsetMin = int16(offset)
 	}
 
-	if version == timeBinaryVersionV1 && len(b) < 15 {
-		return 0, errors.New("insufficient buffer size")
-	} else if version == timeBinaryVersionV2 && len(b) < 16 {
-		return 0, errors.New("insufficient buffer size")
-	}
-
 	sec := t.sec()
 	nsec := t.nsec()
-	_ = b[14]
-	b[0] = version         // byte 0 : version
-	b[1] = byte(sec >> 56) // bytes 1-8: seconds
-	b[2] = byte(sec >> 48)
-	b[3] = byte(sec >> 40)
-	b[4] = byte(sec >> 32)
-	b[5] = byte(sec >> 24)
-	b[6] = byte(sec >> 16)
-	b[7] = byte(sec >> 8)
-	b[8] = byte(sec)
-	b[9] = byte(nsec >> 24) // bytes 9-12: nanoseconds
-	b[10] = byte(nsec >> 16)
-	b[11] = byte(nsec >> 8)
-	b[12] = byte(nsec)
-	b[13] = byte(offsetMin >> 8) // bytes 13-14: zone offset in minutes
-	b[14] = byte(offsetMin)
+	_ = p[14]
+	p[0] = version         // byte 0 : version
+	p[1] = byte(sec >> 56) // bytes 1-8: seconds
+	p[2] = byte(sec >> 48)
+	p[3] = byte(sec >> 40)
+	p[4] = byte(sec >> 32)
+	p[5] = byte(sec >> 24)
+	p[6] = byte(sec >> 16)
+	p[7] = byte(sec >> 8)
+	p[8] = byte(sec)
+	p[9] = byte(nsec >> 24) // bytes 9-12: nanoseconds
+	p[10] = byte(nsec >> 16)
+	p[11] = byte(nsec >> 8)
+	p[12] = byte(nsec)
+	p[13] = byte(offsetMin >> 8) // bytes 13-14: zone offset in minutes
+	p[14] = byte(offsetMin)
 
 	if version == timeBinaryVersionV2 {
-		b[15] = byte(offsetSec)
+		p[15] = byte(offsetSec)
 		return 16, nil
 	}
 
 	return 15, nil
 }
 
-// Read implements the io.Reader interface.
-// It reads the binary representation of a Time value into the p byte slice.
-// In most cases it needs p to have a length of at least 15 bytes.
-// However, if the time value is in the Local location and the zone offset
-// minutes modulo 60 is not zero, it needs the p to have a length of at least 16
-// bytes.
-func (t Time) Read(p []byte) (int, error) {
-	if l, err := t.read(p); err != nil {
-		return l, errors.New("Time.Read: " + err.Error())
+// append reads the binary representation of a Time value into the p byte slice.
+// to be error safe p needs to have a 16 bytes length.
+func (t Time) append(p []byte) (int, error) {
+	var offsetMin int16 // minutes east of UTC. -1 is UTC.
+	var offsetSec int8
+	version := timeBinaryVersionV1
+
+	if t.Location() == UTC {
+		offsetMin = -1
 	} else {
-		return l, nil
+		_, offset := t.Zone()
+		if offset%60 != 0 {
+			version = timeBinaryVersionV2
+			offsetSec = int8(offset % 60)
+		}
+
+		offset /= 60
+		if offset < -32768 || offset == -1 || offset > 32767 {
+			return 0, errors.New("unexpected zone offset")
+		}
+		offsetMin = int16(offset)
+	}
+
+	sec := t.sec()
+	nsec := t.nsec()
+	p = append(p,
+		version,       // byte 0 : version
+		byte(sec>>56), // bytes 1-8: seconds
+		byte(sec>>48),
+		byte(sec>>40),
+		byte(sec>>32),
+		byte(sec>>24),
+		byte(sec>>16),
+		byte(sec>>8),
+		byte(sec),
+		byte(nsec>>24), // bytes 9-12: nanoseconds
+		byte(nsec>>16),
+		byte(nsec>>8),
+		byte(nsec),
+		byte(offsetMin>>8), // bytes 13-14: zone offset in minutes
+		byte(offsetMin),
+	)
+
+	if version == timeBinaryVersionV2 {
+		p = append(p, byte(offsetSec))
+		return 16, nil
+	}
+
+	return 15, nil
+}
+
+// AppendBinary implements the encoding.BinaryAppender interface.
+// It appends the binary representation of a Time value into the p byte slice.
+// If the slice is not large enough, AppendBinary will allocate a new slice.
+func (t Time) AppendBinary(p []byte) ([]byte, error) {
+	start := len(p)
+	if l, err := t.append(p[start:]); err != nil {
+		return p[:start+l], errors.New("Time.AppendBinary: " + err.Error())
+	} else {
+		return p[:start+l], nil
 	}
 }
 
 // MarshalBinary implements the encoding.BinaryMarshaler interface.
 func (t Time) MarshalBinary() ([]byte, error) {
 	p := make([]byte, 16)
-	if l, err := t.read(p); err != nil {
+	if l, err := t.read(p[len(p):]); err != nil {
 		return nil, errors.New("Time.MarshalBinary: " + err.Error())
 	} else {
 		return p[:l], nil
